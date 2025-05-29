@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -47,17 +46,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId = '1' }) => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentQuery = inputValue;
     setInputValue('');
     setIsLoading(true);
 
+    // Create initial bot message that will be updated with streaming content
+    const botMessageId = (Date.now() + 1).toString();
+    const initialBotMessage: Message = {
+      id: botMessageId,
+      text: '',
+      isUser: false,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, initialBotMessage]);
+
     try {
-      const encodedQuery = encodeURIComponent(inputValue);
+      const encodedQuery = encodeURIComponent(currentQuery);
       const response = await fetch(
         `http://127.0.0.1:8000/bot/ask?query=${encodedQuery}&session_id=${sessionId}`,
         {
           method: 'GET',
           headers: {
-            'accept': 'application/json',
+            'accept': 'text/plain',
           },
         }
       );
@@ -66,25 +77,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId = '1' }) => {
         throw new Error('Failed to get response from bot');
       }
 
-      const data = await response.json();
-      
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: data.response || data.message || 'Sorry, I received an empty response.',
-        isUser: false,
-        timestamp: new Date(),
-      };
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedText = '';
 
-      setMessages(prev => [...prev, botMessage]);
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          accumulatedText += chunk;
+          
+          // Update the bot message with accumulated text
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === botMessageId 
+                ? { ...msg, text: accumulatedText }
+                : msg
+            )
+          );
+        }
+      }
+
+      // If no content was received, show a fallback message
+      if (!accumulatedText.trim()) {
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === botMessageId 
+              ? { ...msg, text: 'Sorry, I received an empty response.' }
+              : msg
+          )
+        );
+      }
     } catch (error) {
       console.error('Error sending message:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: 'Sorry, I encountered an error. Please try again.',
-        isUser: false,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages(prev => 
+        prev.map(msg => 
+          msg.id === botMessageId 
+            ? { ...msg, text: 'Sorry, I encountered an error. Please try again.' }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
@@ -149,7 +184,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId = '1' }) => {
                     <User className="w-4 h-4 text-blue-100 mt-1 flex-shrink-0" />
                   )}
                   <div className="flex-1">
-                    <p className="text-sm leading-relaxed break-words">{message.text}</p>
+                    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{message.text}</p>
                     <p
                       className={`text-xs mt-1 ${
                         message.isUser ? 'text-blue-100' : 'text-gray-400'
